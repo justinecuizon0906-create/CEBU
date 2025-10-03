@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cebu Relief Volunteer</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+<style>
+body { margin:0; background:#0f111a; color:#f5f5f5; font-family:'Segoe UI', Tahoma, sans-serif; }
+h1,h2,h3{text-align:center;}
+#landing,#requesterPage,#volunteerPage{display:none; padding:20px;}
+#landing.active,#requesterPage.active,#volunteerPage.active{display:block;}
+.center{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;text-align:center; gap:15px;}
+button{margin:5px;padding:8px 15px;border:none;border-radius:6px;background-color:#2563eb;color:#fff;cursor:pointer;font-size:14px;}
+button:hover{background-color:#1e40af;}
+form{background-color:#1c1f2e;padding:20px;border-radius:10px;max-width:400px;margin:20px;}
+label{display:block;margin-top:10px;}
+input,select,textarea{width:100%;padding:8px;border:none;border-radius:5px;margin-top:5px;background-color:#2a2e3f;color:#fff;}
+#mapRequester,#mapVolunteer{height:400px;width:90%;margin:20px auto;border-radius:10px;position:relative;}
+.recenter-btn{position:absolute;bottom:10px;right:10px;background-color:#2563eb;color:#fff;border:none;border-radius:20px;padding:8px 15px;cursor:pointer;z-index:1000;}
+.request-status{background:#1c1f2e;padding:15px;border-radius:10px;color:#fff;max-width:300px;}
+.form-status-container{display:flex;justify-content:center;align-items:flex-start;gap:20px;flex-wrap:wrap;}
+ul{list-style:none;padding:0;max-width:400px;margin:20px auto;}
+li{background-color:#1c1f2e;padding:10px;border-radius:8px;margin-bottom:10px;}
+img.request-image{max-width:100%;max-height:150px;border-radius:8px;margin-top:5px;}
+.warning-text{font-weight:bold; color:#fbbf24; text-align:center; margin-bottom:10px;}
+.terms-box{max-width:400px; margin:20px auto; background:#1c1f2e; padding:15px; border-radius:10px; font-size:12px; color:#ccc;}
+</style>
+</head>
+
+<!-- Firebase SDKs -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-storage.js"></script>
+
+<body>
+<!-- Landing Page -->
+<div id="landing" class="center active">
+  <h1>Cebu Relief Volunteer Portal</h1>
+  <p>Choose your role to continue</p>
+  <button onclick="showPage('requesterPage')">Looking for Volunteers</button>
+  <button onclick="showPage('volunteerPage')">I'm a Volunteer</button>
+</div>
+
+<!-- Requester Page -->
+<div id="requesterPage">
+  <h2>Submit a Volunteer Request</h2>
+  <div class="form-status-container">
+    <form id="requestForm">
+      <label>Full Name:</label>
+      <input type="text" id="name" required>
+      <label>Facebook Profile URL:</label>
+      <input type="url" id="fb" placeholder="https://facebook.com/yourname" required>
+      <label>Contact Info:</label>
+      <input type="text" id="contact" required>
+      <label>Type of Help Needed:</label>
+      <select id="helpType">
+        <option>Packing</option>
+        <option>Medical</option>
+        <option>Rescue</option>
+        <option>Transport</option>
+      </select>
+      <label>Number of Volunteers Needed:</label>
+      <input type="number" id="needed" value="10" required>
+      <label>Upload Image (or take a photo for authenticity):</label>
+      <input type="file" id="requestImage" accept="image/*" capture="environment" required>
+      <p style="color:#fbbf24; font-size:12px;">⚠️ Image must be taken today and show your actual operation.</p>
+      <button type="submit">Submit Request</button>
+    </form>
+    <div class="request-status" id="requestStatus">
+      <h3>Request Status</h3>
+      <ul id="statusList">No requests yet.</ul>
+    </div>
+  </div>
+  <div style="position:relative;">
+    <div id="mapRequester"></div>
+    <button class="recenter-btn" onclick="recenterRequester()">Recenter</button>
+  </div>
+  <button onclick="showPage('landing')">Back</button>
+</div>
+
+<!-- Volunteer Page -->
+<div id="volunteerPage">
+  <h2>Volunteer Map</h2>
+  <p class="warning-text">Volunteers are advised to verify the request first, such as by checking the photo.</p>
+  <div style="position:relative;">
+    <div id="mapVolunteer"></div>
+  </div>
+  <h3>Available Requests</h3>
+  <ul id="requestList"></ul>
+  <div class="terms-box">
+    <h4>Terms & Conditions</h4>
+    <p>By using this platform, volunteers agree to participate responsibly. The developer is not liable for any personal issues while using the platform. The goal is to innovate and help solve problems efficiently.</p>
+  </div>
+  <button onclick="showPage('landing')">Back</button>
+</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script>
+/* Firebase configuration */
+const firebaseConfig = {
+  apiKey: "AIzaSyAmbkqJXdu8V2pWqLF8DH9GnItrk3bEaZU",
+  authDomain: "cebureliefproject.firebaseapp.com",
+  projectId: "cebureliefproject",
+  storageBucket: "cebureliefproject.appspot.com",
+  messagingSenderId: "750354693779",
+  appId: "1:750354693779:web:bf07532212f20f7ae91766",
+  measurementId: "G-WBYVM6ESKB"
+};
+const app = firebase.initializeApp(firebaseConfig);
+const database = firebase.database();
+const storage = firebase.storage();
+
+let requesterMap, volunteerMap, draggableMarker;
+let requests = [];
+let volunteerMarkers = [];
+let userGoing = {};
+
+function showPage(id){
+  document.querySelectorAll('#landing,#requesterPage,#volunteerPage').forEach(d=>d.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  if(id==='requesterPage') initRequesterMap();
+  if(id==='volunteerPage') initVolunteerMap();
+}
+
+/* Requester map */
+function initRequesterMap(){
+  if(requesterMap) return;
+  requesterMap = L.map('mapRequester').setView([10.3157,123.8854],15);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(requesterMap);
+  draggableMarker = L.marker([10.3157,123.8854],{draggable:true}).addTo(requesterMap)
+    .bindPopup('Drag Me').openPopup();
+}
+function recenterRequester(){
+  if(navigator.geolocation){
+    navigator.geolocation.getCurrentPosition(pos=>{
+      const lat=pos.coords.latitude, lng=pos.coords.longitude;
+      requesterMap.setView([lat,lng],15);
+      draggableMarker.setLatLng([lat,lng]);
+    });
+  }
+}
+
+/* Submit request with Firebase storage & database */
+document.getElementById('requestForm').addEventListener('submit', async e=>{
+  e.preventDefault();
+  const nameEl = document.getElementById('name');
+  const fbEl = document.getElementById('fb');
+  const contactEl = document.getElementById('contact');
+  const helpTypeEl = document.getElementById('helpType');
+  const neededEl = document.getElementById('needed');
+  const imageFile = document.getElementById('requestImage').files[0];
+
+  if(!imageFile){
+    alert('Image is required.');
+    return;
+  }
+  const today = new Date();
+  const imgDate = new Date(imageFile.lastModified);
+  if(imgDate.toDateString() !== today.toDateString()){
+    alert('Image must be taken today for authenticity.');
+    return;
+  }
+  if(!nameEl.value || !fbEl.value || !contactEl.value || !helpTypeEl.value || !neededEl.value){
+    alert('All fields are required.');
+    return;
+  }
+
+  // Upload image to Firebase Storage
+  const storageRef = storage.ref('request_images/' + Date.now() + '_' + imageFile.name);
+  await storageRef.put(imageFile);
+  const imageUrl = await storageRef.getDownloadURL();
+
+  // Push request to Realtime Database
+  const newRequestRef = database.ref('requests').push();
+  const requestData = {
+    name: nameEl.value,
+    fb: fbEl.value,
+    contact: contactEl.value,
+    help: helpTypeEl.value,
+    needed: parseInt(neededEl.value),
+    lat: draggableMarker.getLatLng().lat,
+    lng: draggableMarker.getLatLng().lng,
+    going: 0,
+    image: imageUrl
+  };
+  await newRequestRef.set(requestData);
+
+  alert('Request submitted successfully!');
+  e.target.reset();
+});
+
+/* Fetch requests from Firebase and render volunteer map */
+function initVolunteerMap(){
+  if(volunteerMap) return;
+  volunteerMap = L.map('mapVolunteer').setView([10.3157,123.8854],15);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(volunteerMap);
+
+  // Listen to database updates
+  database.ref('requests').on('value', snapshot=>{
+    requests = [];
+    snapshot.forEach(childSnap=>{
+      const r = childSnap.val();
+      r.key = childSnap.key;
+      r.latlng = {lat: r.lat, lng: r.lng};
+      requests.push(r);
+    });
+    renderRequests();
+  });
+}
+
+/* Render requests */
+function renderRequests(){
+  volunteerMarkers.forEach(m=>volunteerMap.removeLayer(m));
+  volunteerMarkers=[];
+  if(requests.length===0) return;
+  volunteerMap.setView(requests[0].latlng,15);
+
+  const list=document.getElementById('requestList');
+  list.innerHTML='';
+
+  requests.forEach((r,i)=>{
+    const isGoing = userGoing[i] ? true : false;
+    const li = document.createElement('li');
+    li.innerHTML = `
+      <strong>${r.help}</strong> - Need ${r.needed} volunteers<br>
+      Name: ${r.name}<br>
+      Contact: ${r.contact}<br>
+      Details: ${r.help}<br>
+      Going: ${r.going}/${r.needed}<br>
+      ${r.image ? `<img class="request-image" src="${r.image}">` : ''}<br>
+      <button style="font-size:12px;padding:4px 8px;margin-top:5px;" onclick="openMap(${i})">Google Maps</button>
+      <button style="font-size:12px;padding:4px 8px;" onclick="openWaze(${i})">Waze</button>
+      <button style="font-size:12px;padding:4px 8px;" onclick="viewFB(${i})">View FB</button><br>
+      <button style="font-size:16px;padding:8px 15px;width:100%;" ${isGoing ? 'disabled' : ''} onclick="imGoing(${i})">
+        ${isGoing ? 'Going' : 'I’m Going'}
+      </button>
+      ${isGoing ? `<button style="font-size:14px;padding:6px 12px;margin-top:5px;width:100%;" onclick="cancelGoing(${i})">Cancel</button>` : ''}
+    `;
+    list.appendChild(li);
+
+    const svgIcon=L.divIcon({
+      className:'',
+      html:`<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="red" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 2C8.1 2 5 5.1 5 9c0 5.2 7 13 7 13s7-7.8 7-13c0-3.9-3.1-7-7-7z"/>
+      <circle cx="12" cy="9" r="2" fill="white"/>
+      </svg>`,
+      iconSize:[32,32],
+      iconAnchor:[16,32]
+    });
+    const marker=L.marker(r.latlng,{icon:svgIcon}).addTo(volunteerMap);
+    marker.bindPopup(li.innerHTML);
+    volunteerMarkers.push(marker);
+  });
+}
+
+/* Volunteer actions */
+function imGoing(index){
+  if(userGoing[index]) return;
+  if(requests[index].going < requests[index].needed){
+    requests[index].going++;
+    userGoing[index] = true;
+    database.ref('requests/'+requests[index].key+'/going').set(requests[index].going);
+  }
+}
+function cancelGoing(index){
+  if(requests[index].going > 0) requests[index].going--;
+  delete userGoing[index];
+  database.ref('requests/'+requests[index].key+'/going').set(requests[index].going);
+}
+function openMap(index){
+  const {lat,lng}=requests[index].latlng;
+  window.open(`https://www.google.com/maps?q=${lat},${lng}`);
+}
+function openWaze(index){
+  const {lat,lng}=requests[index].latlng;
+  window.open(`https://waze.com/ul?ll=${lat},${lng}&navigate=yes`);
+}
+function viewFB(index){
+  window.open(requests[index].fb,'_blank');
+}
+// Auto-refresh request list every 5 minutes (300000 ms)
+setInterval(() => {
+    updateStatusList();  // Updates the requester status
+    if(volunteerMap) renderRequests();  // Updates volunteer map & list
+}, 300000); // 300000 ms = 5 minutes
+</script>
+</body>
+</html>
+
